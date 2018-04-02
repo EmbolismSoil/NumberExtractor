@@ -1,0 +1,3 @@
+config = {
+    'db_url': ''
+}
