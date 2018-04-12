@@ -1,6 +1,7 @@
 import re
 import jieba
 from .models import *
+import math
 
 
 class NB(object):
@@ -140,3 +141,47 @@ class NB(object):
             sms = sms[end:]
             if not sms:
                 break
+
+
+    def __get_word_count(self, w):
+        word_cnt = list(self._session.query(ClassWordCount).filter_by(word=w))
+        if word_cnt is None:
+            return 1, 1
+
+        if len(word_cnt) != 2:
+            print('ERROR: %s cls is %d ' % (w, len(word_cnt)))
+
+
+        if word_cnt[0].cls == 'is_qq_number' and word_cnt[1].cls == 'is_not_qq_number':
+            is_qq_word_cnt = word_cnt[0].cnt
+            is_not_qq_word_cnt = word_cnt[1].cnt
+        elif word_cnt[1].cls == 'is_qq_number' and word_cnt[0].cls == 'is_not_qq_number':
+            is_qq_word_cnt = word_cnt[1].cnt
+            is_not_qq_word_cnt = word_cnt[0].cnt
+        else:
+            print("ERROR:  word_cnt[0].cls = %s,  word_cnt[1].cls = %s" % ( word_cnt[0].cls,  word_cnt[1].cls))
+            is_qq_word_cnt = 1
+            is_not_qq_word_cnt = 1
+
+        return is_qq_word_cnt, is_not_qq_word_cnt
+
+
+    def __get_cls_count(self, cls):
+        cls_count = self._session.query(ClassCount).filter_by(cls=cls).one()
+        return cls_count.cnt
+
+
+    def predict(self, ctx):
+        is_qq_cls_cnt = self.__get_cls_count('is_qq_number')
+        is_not_qq_cls_cnt = self.__get_cls_count('is_not_qq_number')
+        total_cnt = is_qq_cls_cnt + is_not_qq_cls_cnt
+
+        p_positive = is_qq_cls_cnt / total_cnt
+        p_negative = is_not_qq_cls_cnt / total_cnt
+
+        for w in ctx:
+            is_qq_cls_word_cnt, is_not_qq_cls_word_cnt = self.__get_word_count(w)
+            p_positive = p_positive * math.log2(is_qq_cls_word_cnt / is_qq_cls_cnt)
+            p_negative = p_negative * math.log(is_not_qq_cls_cnt / is_not_qq_cls_word_cnt)
+
+        return True if p_positive > p_negative else False
