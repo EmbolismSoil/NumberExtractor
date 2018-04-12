@@ -2,6 +2,7 @@ import re
 import jieba
 from .models import *
 import math
+import traceback
 
 
 class NB(object):
@@ -14,6 +15,7 @@ class NB(object):
         jieba.set_dictionary(dict_path)
         self._stop_wrods = set()
         for line in self._stop_wrods_file:
+            line = line.rstrip('\n')
             self._stop_wrods.add(line)
 
         self._cls_cnt = {False: 0, True: 0}
@@ -38,6 +40,7 @@ class NB(object):
         for ctx, is_qq in self.__records():
             cls_cnt[is_qq] = cls_cnt.get(is_qq, 0) + 1
             for w in ctx:
+                w = w.lower()
                 cls_word_cnt[is_qq][w] = cls_word_cnt[is_qq].get(w, 0) + 1
 
         self._cls_cnt = cls_cnt
@@ -55,16 +58,22 @@ class NB(object):
         is_not_qq_word_statis = self._cls_word_cnt[False]
 
         for k, v in is_qq_word_statis.items():
-            cls_word_cnt = ClassWordCount(cls='is_qq_number', cnt=v)
+            cls_word_cnt = ClassWordCount(cls='is_qq_number', word=k, cnt=v)
+            print('insert is_qq_word_cnt: (%s, %d)' % (k, v))
             self._session.add(cls_word_cnt)
+
 
 
         for k, v in is_not_qq_word_statis.items():
-            cls_word_cnt = ClassWordCount(cls='is_not_qq_number', cnt=v)
+            cls_word_cnt = ClassWordCount(cls='is_not_qq_number',word=k, cnt=v)
+            print('insert is_not_qq_word_cnt: (%s, %d)' % (k, v))
             self._session.add(cls_word_cnt)
 
         #let it crash
-        self._session.commit()
+        try:
+            self._session.commit()
+        except Exception as e:
+            traceback.print_exc()
 
 
     def __update(self):
@@ -130,11 +139,17 @@ class NB(object):
             start = so.span()[0]
             end = so.span()[1]
             ctx_start = start - self._ctx_len
+            ctx_end = end + self._ctx_len
 
             if ctx_start < 0:
-                ctx = sms[:start]
-            else:
-                ctx = sms[ctx_start:start]
+                ctx_start = 0
+
+            if ctx_end > len(sms):
+                ctx_end = len(sms)
+
+            ctx1 = sms[ctx_start:start]
+            ctx2 = sms[end:ctx_end]
+            ctx = ctx1 + ctx2
 
             yield ctx, so.group()
 
@@ -144,31 +159,26 @@ class NB(object):
 
 
     def __get_word_count(self, w):
-        word_cnt = list(self._session.query(ClassWordCount).filter_by(word=w))
+        word_cnt = self._session.query(ClassWordCount).filter_by(word=w).all()
         if word_cnt is None:
             return 1, 1
 
-        if len(word_cnt) != 2:
-            print('ERROR: %s cls is %d ' % (w, len(word_cnt)))
+        is_qq_word_cnt = 1
+        is_not_qq_word_cnt = 1
 
+        for c in word_cnt:
+            if c.cls == 'is_qq_number':
+                is_qq_word_cnt = c.cnt
+            else:
+                is_not_qq_word_cnt = c.cnt
 
-        if word_cnt[0].cls == 'is_qq_number' and word_cnt[1].cls == 'is_not_qq_number':
-            is_qq_word_cnt = word_cnt[0].cnt
-            is_not_qq_word_cnt = word_cnt[1].cnt
-        elif word_cnt[1].cls == 'is_qq_number' and word_cnt[0].cls == 'is_not_qq_number':
-            is_qq_word_cnt = word_cnt[1].cnt
-            is_not_qq_word_cnt = word_cnt[0].cnt
-        else:
-            print("ERROR:  word_cnt[0].cls = %s,  word_cnt[1].cls = %s" % ( word_cnt[0].cls,  word_cnt[1].cls))
-            is_qq_word_cnt = 1
-            is_not_qq_word_cnt = 1
 
         return is_qq_word_cnt, is_not_qq_word_cnt
 
 
     def __get_cls_count(self, cls):
         cls_count = self._session.query(ClassCount).filter_by(cls=cls).one()
-        return cls_count.cnt
+        return cls_count.cnt if cls_count.cnt > 0 else 1
 
 
     def predict(self, ctx):
@@ -181,7 +191,7 @@ class NB(object):
 
         for w in ctx:
             is_qq_cls_word_cnt, is_not_qq_cls_word_cnt = self.__get_word_count(w)
-            p_positive = p_positive * math.log2(is_qq_cls_word_cnt / is_qq_cls_cnt)
-            p_negative = p_negative * math.log(is_not_qq_cls_cnt / is_not_qq_cls_word_cnt)
+            p_positive = p_positive * (is_qq_cls_word_cnt / is_qq_cls_cnt)
+            p_negative = p_negative * (is_not_qq_cls_word_cnt / is_not_qq_cls_cnt)
 
         return True if p_positive > p_negative else False
