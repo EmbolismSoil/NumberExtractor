@@ -4,13 +4,14 @@ from .models import *
 import math
 import traceback
 import unicodedata
-
+from sqlalchemy.dialects.mysql import insert
 
 class NB(object):
-    def __init__(self, data_path, dict_path, stop_words_path, ctx_len):
+    def __init__(self, data_path, dict_path, stop_words_path, ctx_start_len, ctx_end_len):
         self._data_path = data_path
         self._stop_wrods_path = stop_words_path
-        self._ctx_len = ctx_len
+        self._ctx_start_len = ctx_start_len
+        self._ctx_end_len = ctx_end_len
         self._data_file = open(data_path, 'r')
         self._stop_wrods_file = open(stop_words_path, 'r')
         jieba.set_dictionary(dict_path)
@@ -24,6 +25,8 @@ class NB(object):
         self._cls_cnt = {False: 0, True: 0}
         self._cls_word_cnt = {False: {}, True: {}}
         self._session = DBSession()
+        self._engine = engine
+
 
     @staticmethod
     def is_number(s):
@@ -41,6 +44,7 @@ class NB(object):
 
         return False
 
+
     def update_train(self):
         self.__do_train()
         self.__update()
@@ -55,7 +59,7 @@ class NB(object):
         cls_cnt = {False: 0, True: 0}
         cls_word_cnt = {False: {}, True: {}}
 
-        for ctx, is_qq in self.__records():
+        for ctx, is_qq in self.__records(self._data_file):
             cls_cnt[is_qq] = cls_cnt.get(is_qq, 0) + 1
             for w in ctx:
                 w = w.lower()
@@ -65,42 +69,62 @@ class NB(object):
         self._cls_word_cnt = cls_word_cnt
 
 
-    def __save(self):
+    def __insert_cls_cnt(self, cls, cnt):
+        sql = """INSERT INTO cls_cnt VALUES('%s', %d) ON DUPLICATE KEY UPDATE cnt = cnt + %d""" % (cls, cnt, cnt)
+        self._engine.execute(sql)
 
-        is_qq_cls_cnt = ClassCount(cls='is_qq_number', cnt=self._cls_cnt[True])
-        is_not_qq_cls_cnt = ClassCount(cls='is_not_qq_number', cnt=self._cls_cnt[False])
-        self._session.add(is_qq_cls_cnt)
-        self._session.add(is_not_qq_cls_cnt)
+
+    def __insert_cls_word_cnt(self, cls, w, cnt):
+        sql = """INSERT INTO cls_word_cnt VALUES('%s', '%s', %d) ON DUPLICATE KEY UPDATE cnt = cnt + %d""" % (cls, w, cnt, cnt)
+        self._engine.execute(sql)
+
+
+    def __save(self):
+        #is_qq_cls_cnt = ClassCount(cls='is_qq_number', cnt=self._cls_cnt[True])
+        #is_not_qq_cls_cnt = ClassCount(cls='is_not_qq_number', cnt=self._cls_cnt[False])
+
+        #self._session.add(is_qq_cls_cnt)
+        #self._session.add(is_not_qq_cls_cnt)
+        self.__insert_cls_cnt('is_qq_number', self._cls_cnt[True])
+        self.__insert_cls_cnt('is_not_qq_number', self._cls_cnt[False])
+
 
         is_qq_word_statis = self._cls_word_cnt[True]
         is_not_qq_word_statis = self._cls_word_cnt[False]
 
         for k, v in is_qq_word_statis.items():
-            cls_word_cnt = ClassWordCount(cls='is_qq_number', word=k, cnt=v)
+            #cls_word_cnt = ClassWordCount(cls='is_qq_number', word=k, cnt=v)
             print('insert is_qq_word_cnt: (%s, %d)' % (k, v))
-            self._session.add(cls_word_cnt)
+            self.__insert_cls_word_cnt('is_qq_number', k, v)
+            #self._session.add(cls_word_cnt)
+            """
             try:
                 self._session.commit()
             except Exception as e:
                 self._session.rollback()
                 traceback.print_exc()
+            """
 
 
         for k, v in is_not_qq_word_statis.items():
-            cls_word_cnt = ClassWordCount(cls='is_not_qq_number',word=k, cnt=v)
+            #cls_word_cnt = ClassWordCount(cls='is_not_qq_number',word=k, cnt=v)
             print('insert is_not_qq_word_cnt: (%s, %d)' % (k, v))
-            self._session.add(cls_word_cnt)
+            self.__insert_cls_word_cnt('is_not_qq_number', k, v)
+            #self._session.add(cls_word_cnt)
+            """
             try:
                 self._session.commit()
             except Exception as e:
                 self._session.rollback()
                 traceback.print_exc()
+            """
 
         #let it crash
         try:
             self._session.commit()
         except Exception as e:
             traceback.print_exc()
+            self._session.rollback()
 
 
     def __update(self):
@@ -132,13 +156,12 @@ class NB(object):
             is_not_qq_numer_word_cnt = is_not_qq_numer_word_cnt.cnt
             is_qq_word_statis[k] = v + is_not_qq_numer_word_cnt
 
-
         self.__save()
 
 
 
-    def __records(self):
-        for idx, line in enumerate(self._data_file):
+    def __records(self, f):
+        for idx, line in enumerate(f):
             fields = line.strip('\n').split('\t')
             if len(fields) != 2:
                 print('format error, line = %d, content = %s' % (idx, line))
@@ -148,16 +171,17 @@ class NB(object):
             qq = fields[1]
 
             for ctx, number in self.__get_numbers(sms):
-                ctx = jieba.cut(ctx)
-                filtered_ctx = filter(lambda x : x not in self._stop_words or not self.is_number(x), ctx)
+                if len(number) < 5 or len(number) > 11:
+                    continue
 
                 if number == qq:
-                    yield  filtered_ctx, True
+                    yield  ctx, True
                 else:
-                    yield  filtered_ctx, False
+                    yield  ctx, False
 
 
     def __get_numbers(self, sms):
+        sms = self.__filter_stop_wrods(sms)
         while True:
             so = re.search('[0-9]+', sms)
             if so is None:
@@ -165,17 +189,15 @@ class NB(object):
 
             start = so.span()[0]
             end = so.span()[1]
-            ctx_start = start - self._ctx_len
-            ctx_end = end + self._ctx_len
 
-            if ctx_start < 0:
-                ctx_start = 0
+            ctx1 = jieba.cut(sms[:start])
+            ctx2 = jieba.cut(sms[end:])
 
-            if ctx_end > len(sms):
-                ctx_end = len(sms)
+            ctx1 = list(filter(lambda x: x not in self._stop_words and not self.is_number(x), ctx1))
+            ctx2 = list(filter(lambda x : x not in self._stop_words and not self.is_number(x), ctx2))
+            ctx1 = ctx1[-self._ctx_start_len:]
+            ctx2 = ctx2[:self._ctx_end_len]
 
-            ctx1 = sms[ctx_start:start]
-            ctx2 = sms[end:ctx_end]
             ctx = ctx1 + ctx2
 
             yield ctx, so.group()
@@ -185,20 +207,26 @@ class NB(object):
                 break
 
 
+    def __filter_stop_wrods(self, sms):
+        for w in self._stop_words:
+            sms = sms.replace(w, '')
+
+        return sms
+
+
     def __get_word_count(self, w):
         word_cnt = self._session.query(ClassWordCount).filter_by(word=w).all()
         if not word_cnt:
             return None, None
 
-        is_qq_word_cnt = 1
-        is_not_qq_word_cnt = 1
+        is_qq_word_cnt = None
+        is_not_qq_word_cnt = None
 
         for c in word_cnt:
             if c.cls == 'is_qq_number':
                 is_qq_word_cnt = c.cnt
             else:
                 is_not_qq_word_cnt = c.cnt
-
 
         return is_qq_word_cnt, is_not_qq_word_cnt
 
@@ -210,23 +238,48 @@ class NB(object):
 
     def predict(self, ctx):
         ctx = jieba.cut(ctx)
-        ctx = filter(lambda x : x not in self._stop_words or not self.is_number(x), ctx)
+        ctx = filter(lambda x : x not in self._stop_words and not self.is_number(x), ctx)
+        return self._predict(ctx)
+
+
+    def _predict(self, ctx):
         is_qq_cls_cnt = self.__get_cls_count('is_qq_number')
         is_not_qq_cls_cnt = self.__get_cls_count('is_not_qq_number')
         total_cnt = is_qq_cls_cnt + is_not_qq_cls_cnt
 
-        p_positive = is_qq_cls_cnt / total_cnt
-        p_negative = is_not_qq_cls_cnt / total_cnt
+        #取对数把连乘变成连加，防止乘法下溢
+        p_positive = math.log(is_qq_cls_cnt / total_cnt)
+        p_negative = math.log(is_not_qq_cls_cnt / total_cnt)
 
         for w in ctx:
             is_qq_cls_word_cnt, is_not_qq_cls_word_cnt = self.__get_word_count(w)
-            if is_qq_cls_word_cnt is None and is_not_qq_cls_word_cnt is None:
+            #因为黑样本比较少，所以is_qq_cls_word_cnt如果是None的话，不一定说明这个词是一个小概率事件，而是因为样本没覆盖到而已
+            #所以跳过这个词。如果is_not_qq_cls_word_cnt是None说明这个词在is_not_qq_cls这个分类中出现的概率很小，因为is_not_qq_cls的
+            #样本数量很大，基本上都会覆盖到
+            if is_qq_cls_word_cnt is None :
                 continue
 
-            p_positive = p_positive * (is_qq_cls_word_cnt / is_qq_cls_cnt)
-            p_negative = p_negative * (is_not_qq_cls_word_cnt / is_not_qq_cls_cnt)
+            if is_not_qq_cls_word_cnt is None:
+                is_not_qq_cls_word_cnt = 2
+
+            p_positive = p_positive + math.log(is_qq_cls_word_cnt / is_qq_cls_cnt)
+            p_negative = p_negative + math.log(is_not_qq_cls_word_cnt / is_not_qq_cls_cnt)
 
         if p_positive > p_negative:
             return True
         else:
             return False
+
+    def test(self, test_file_path):
+        total_cnt = 0
+        right_cnt = 0
+        with open(test_file_path, 'r') as f:
+            for ctx, is_qq in self.__records(f):
+                ret = self._predict(ctx)
+                if ret == is_qq:
+                    right_cnt += 1
+                else:
+                    print('error: ret = %s , is_qq = %s, ctx = %s' % (str(ret), str(is_qq), str(ctx)))
+                total_cnt += 1
+
+        print('accuracy: %f' % (right_cnt / total_cnt))
