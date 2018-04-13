@@ -3,6 +3,7 @@ import jieba
 from .models import *
 import math
 import traceback
+import unicodedata
 
 
 class NB(object):
@@ -13,15 +14,32 @@ class NB(object):
         self._data_file = open(data_path, 'r')
         self._stop_wrods_file = open(stop_words_path, 'r')
         jieba.set_dictionary(dict_path)
-        self._stop_wrods = set()
+        self._stop_words = set()
         for line in self._stop_wrods_file:
             line = line.rstrip('\n')
-            self._stop_wrods.add(line)
+            self._stop_words.add(line)
+
+        self._stop_words = sorted(self._stop_words)
 
         self._cls_cnt = {False: 0, True: 0}
         self._cls_word_cnt = {False: {}, True: {}}
         self._session = DBSession()
 
+    @staticmethod
+    def is_number(s):
+        try:
+            float(s)
+            return True
+        except ValueError:
+            pass
+
+        try:
+            unicodedata.numeric(s)
+            return True
+        except (TypeError, ValueError):
+            pass
+
+        return False
 
     def update_train(self):
         self.__do_train()
@@ -61,13 +79,22 @@ class NB(object):
             cls_word_cnt = ClassWordCount(cls='is_qq_number', word=k, cnt=v)
             print('insert is_qq_word_cnt: (%s, %d)' % (k, v))
             self._session.add(cls_word_cnt)
-
+            try:
+                self._session.commit()
+            except Exception as e:
+                self._session.rollback()
+                traceback.print_exc()
 
 
         for k, v in is_not_qq_word_statis.items():
             cls_word_cnt = ClassWordCount(cls='is_not_qq_number',word=k, cnt=v)
             print('insert is_not_qq_word_cnt: (%s, %d)' % (k, v))
             self._session.add(cls_word_cnt)
+            try:
+                self._session.commit()
+            except Exception as e:
+                self._session.rollback()
+                traceback.print_exc()
 
         #let it crash
         try:
@@ -112,7 +139,7 @@ class NB(object):
 
     def __records(self):
         for idx, line in enumerate(self._data_file):
-            fields = line.split('\t')
+            fields = line.strip('\n').split('\t')
             if len(fields) != 2:
                 print('format error, line = %d, content = %s' % (idx, line))
                 continue
@@ -122,7 +149,7 @@ class NB(object):
 
             for ctx, number in self.__get_numbers(sms):
                 ctx = jieba.cut(ctx)
-                filtered_ctx = filter(lambda x : x not in self._stop_wrods, ctx)
+                filtered_ctx = filter(lambda x : x not in self._stop_words or not self.is_number(x), ctx)
 
                 if number == qq:
                     yield  filtered_ctx, True
@@ -160,8 +187,8 @@ class NB(object):
 
     def __get_word_count(self, w):
         word_cnt = self._session.query(ClassWordCount).filter_by(word=w).all()
-        if word_cnt is None:
-            return 1, 1
+        if not word_cnt:
+            return None, None
 
         is_qq_word_cnt = 1
         is_not_qq_word_cnt = 1
@@ -182,6 +209,8 @@ class NB(object):
 
 
     def predict(self, ctx):
+        ctx = jieba.cut(ctx)
+        ctx = filter(lambda x : x not in self._stop_words or not self.is_number(x), ctx)
         is_qq_cls_cnt = self.__get_cls_count('is_qq_number')
         is_not_qq_cls_cnt = self.__get_cls_count('is_not_qq_number')
         total_cnt = is_qq_cls_cnt + is_not_qq_cls_cnt
@@ -191,7 +220,13 @@ class NB(object):
 
         for w in ctx:
             is_qq_cls_word_cnt, is_not_qq_cls_word_cnt = self.__get_word_count(w)
+            if is_qq_cls_word_cnt is None and is_not_qq_cls_word_cnt is None:
+                continue
+
             p_positive = p_positive * (is_qq_cls_word_cnt / is_qq_cls_cnt)
             p_negative = p_negative * (is_not_qq_cls_word_cnt / is_not_qq_cls_cnt)
 
-        return True if p_positive > p_negative else False
+        if p_positive > p_negative:
+            return True
+        else:
+            return False
