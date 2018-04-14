@@ -167,9 +167,9 @@ class NB(object):
                     continue
 
                 if number == qq:
-                    yield  ctx, True
+                    yield  set(ctx), True
                 else:
-                    yield  ctx, False
+                    yield  set(ctx), False
 
 
     def __get_numbers(self, sms):
