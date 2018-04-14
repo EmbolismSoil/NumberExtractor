@@ -4,7 +4,8 @@ from .models import *
 import math
 import traceback
 import unicodedata
-from sqlalchemy.dialects.mysql import insert
+from tqdm import tqdm
+
 
 class NB(object):
     def __init__(self, data_path, dict_path, stop_words_path, ctx_start_len, ctx_end_len):
@@ -59,7 +60,7 @@ class NB(object):
         cls_cnt = {False: 0, True: 0}
         cls_word_cnt = {False: {}, True: {}}
 
-        for ctx, is_qq in self.__records(self._data_file):
+        for ctx, is_qq in tqdm(self.__records(self._data_file), desc='train'):
             cls_cnt[is_qq] = cls_cnt.get(is_qq, 0) + 1
             for w in ctx:
                 w = w.lower()
@@ -80,11 +81,6 @@ class NB(object):
 
 
     def __save(self):
-        #is_qq_cls_cnt = ClassCount(cls='is_qq_number', cnt=self._cls_cnt[True])
-        #is_not_qq_cls_cnt = ClassCount(cls='is_not_qq_number', cnt=self._cls_cnt[False])
-
-        #self._session.add(is_qq_cls_cnt)
-        #self._session.add(is_not_qq_cls_cnt)
         self.__insert_cls_cnt('is_qq_number', self._cls_cnt[True])
         self.__insert_cls_cnt('is_not_qq_number', self._cls_cnt[False])
 
@@ -92,32 +88,29 @@ class NB(object):
         is_qq_word_statis = self._cls_word_cnt[True]
         is_not_qq_word_statis = self._cls_word_cnt[False]
 
-        for k, v in is_qq_word_statis.items():
-            #cls_word_cnt = ClassWordCount(cls='is_qq_number', word=k, cnt=v)
+        cnt = 0
+        for k, v in tqdm(is_qq_word_statis.items(), desc='save is_qq_word_cnt'):
+            cnt += 1
             print('insert is_qq_word_cnt: (%s, %d)' % (k, v))
             self.__insert_cls_word_cnt('is_qq_number', k, v)
-            #self._session.add(cls_word_cnt)
-            """
-            try:
-                self._session.commit()
-            except Exception as e:
-                self._session.rollback()
-                traceback.print_exc()
-            """
+            if cnt % 2000 == 0:
+                try:
+                    self._session.commit()
+                except Exception as e:
+                    traceback.print_exc()
+                    self._session.rollback()
 
 
-        for k, v in is_not_qq_word_statis.items():
-            #cls_word_cnt = ClassWordCount(cls='is_not_qq_number',word=k, cnt=v)
+        for k, v in tqdm(is_not_qq_word_statis.items(), desc='save is_not_qq_word_cnt'):
+            cnt += 1
             print('insert is_not_qq_word_cnt: (%s, %d)' % (k, v))
             self.__insert_cls_word_cnt('is_not_qq_number', k, v)
-            #self._session.add(cls_word_cnt)
-            """
-            try:
-                self._session.commit()
-            except Exception as e:
-                self._session.rollback()
-                traceback.print_exc()
-            """
+            if cnt % 2000 == 0:
+                try:
+                    self._session.commit()
+                except Exception as e:
+                    traceback.print_exc()
+                    self._session.rollback()
 
         #let it crash
         try:
@@ -269,6 +262,7 @@ class NB(object):
             return True
         else:
             return False
+
 
     def test(self, test_file_path):
         total_cnt = 0
