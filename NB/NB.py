@@ -275,7 +275,7 @@ class NB(object):
         total_cnt = 0
         right_cnt = 0
         with open(test_file_path, 'r') as f:
-            for ctx, is_qq in self.__records(f):
+            for ctx, is_qq in tqdm(self.__records(f)):
                 ret = self._predict(ctx)
                 if ret == is_qq:
                     right_cnt += 1
