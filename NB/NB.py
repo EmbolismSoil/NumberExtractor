@@ -8,18 +8,26 @@ from tqdm import tqdm
 
 
 class NB(object):
-    def __init__(self, data_path, dict_path, stop_words_path, ctx_start_len, ctx_end_len):
+    def __init__(self, data_path, dict_path, stop_words_path, noise_char_path, ctx_start_len, ctx_end_len):
         self._data_path = data_path
         self._stop_wrods_path = stop_words_path
         self._ctx_start_len = ctx_start_len
         self._ctx_end_len = ctx_end_len
         self._data_file = open(data_path, 'r')
         self._stop_wrods_file = open(stop_words_path, 'r')
+        self._noise_char_file = open(noise_char_path, 'r')
+
         jieba.set_dictionary(dict_path)
         self._stop_words = set()
+        self._noise_chars = set()
+
         for line in self._stop_wrods_file:
             line = line.rstrip('\n')
             self._stop_words.add(line)
+
+        for line in self._noise_char_file:
+            line = line.rstrip('\n')
+            self._noise_chars.add(line)
 
         self._stop_words = sorted(self._stop_words)
 
@@ -88,29 +96,20 @@ class NB(object):
         is_qq_word_statis = self._cls_word_cnt[True]
         is_not_qq_word_statis = self._cls_word_cnt[False]
 
-        cnt = 0
         for k, v in tqdm(is_qq_word_statis.items(), desc='save is_qq_word_cnt'):
-            cnt += 1
-            print('insert is_qq_word_cnt: (%s, %d)' % (k, v))
-            self.__insert_cls_word_cnt('is_qq_number', k, v)
-            if cnt % 2000 == 0:
-                try:
-                    self._session.commit()
-                except Exception as e:
-                    traceback.print_exc()
-                    self._session.rollback()
+            try:
+                self.__insert_cls_word_cnt('is_qq_number', k, v)
+            except Exception as e:
+                traceback.print_exc()
+
 
 
         for k, v in tqdm(is_not_qq_word_statis.items(), desc='save is_not_qq_word_cnt'):
-            cnt += 1
-            print('insert is_not_qq_word_cnt: (%s, %d)' % (k, v))
-            self.__insert_cls_word_cnt('is_not_qq_number', k, v)
-            if cnt % 2000 == 0:
-                try:
-                    self._session.commit()
-                except Exception as e:
-                    traceback.print_exc()
-                    self._session.rollback()
+            try:
+                self.__insert_cls_word_cnt('is_not_qq_number', k, v)
+            except Exception as e:
+                traceback.print_exc()
+
 
         #let it crash
         try:
@@ -174,7 +173,8 @@ class NB(object):
 
 
     def __get_numbers(self, sms):
-        sms = self.__filter_stop_wrods(sms)
+        sms = self.__filter_noise_chars(sms)
+
         while True:
             so = re.search('[0-9]+', sms)
             if so is None:
@@ -198,6 +198,13 @@ class NB(object):
             sms = sms[end:]
             if not sms:
                 break
+
+
+    def __filter_noise_chars(self, sms):
+        for w in self._noise_chars:
+            sms = sms.replace(w, '')
+
+        return sms
 
 
     def __filter_stop_wrods(self, sms):
