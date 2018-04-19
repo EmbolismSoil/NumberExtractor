@@ -231,6 +231,19 @@ class NB(object):
         return is_qq_word_cnt, is_not_qq_word_cnt
 
 
+    def __get_avg_p(self):
+        if hasattr(self, '_avg_p'):
+            return getattr(self, '_avg_p')
+
+        cls_count = self._session.query(ClassCount).filter_by(cls='is_not_qq_number').one()
+        sql = """SELECT avg(cnt / %d) AS avg_p FROM cls_word_cnt WHERE cls = 'is_not_qq_number'""" % cls_count.cnt
+        ret = list(self._engine.execute(sql))
+        avg_p = list(ret[0])
+        avg_p = avg_p[0]
+        setattr(self, '_avg_p', avg_p)
+        return self.__get_avg_p()
+
+
     def __get_cls_count(self, cls):
         cls_count = self._session.query(ClassCount).filter_by(cls=cls).one()
         return cls_count.cnt if cls_count.cnt > 0 else 1
@@ -253,17 +266,19 @@ class NB(object):
 
         for w in ctx:
             is_qq_cls_word_cnt, is_not_qq_cls_word_cnt = self.__get_word_count(w)
-            #因为黑样本比较少，所以is_qq_cls_word_cnt如果是None的话，不一定说明这个词是一个小概率事件，而是因为样本没覆盖到而已
-            #所以跳过这个词。如果is_not_qq_cls_word_cnt是None说明这个词在is_not_qq_cls这个分类中出现的概率很小，因为is_not_qq_cls的
-            #样本数量很大，基本上都会覆盖到
-            if is_qq_cls_word_cnt is None :
-                continue
 
-            if is_not_qq_cls_word_cnt is None:
-                is_not_qq_cls_word_cnt = 2
+            #如果一个词没有出现，那么估计这个词出现的概率为平均每个词出现的概率
+            __P_is_qq = self.__get_avg_p()
+            __P_is_not_qq = self.__get_avg_p()
 
-            p_positive = p_positive + math.log(is_qq_cls_word_cnt / is_qq_cls_cnt)
-            p_negative = p_negative + math.log(is_not_qq_cls_word_cnt / is_not_qq_cls_cnt)
+            if is_qq_cls_word_cnt is not None:
+                __P_is_qq = is_qq_cls_word_cnt / is_qq_cls_cnt
+
+            if is_not_qq_cls_word_cnt is not None:
+                __P_is_not_qq = is_not_qq_cls_word_cnt / is_not_qq_cls_cnt
+
+            p_positive = p_positive + math.log(__P_is_qq)
+            p_negative = p_negative + math.log(__P_is_not_qq)
 
         if p_positive > p_negative:
             return True
