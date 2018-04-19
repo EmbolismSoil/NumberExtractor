@@ -232,15 +232,25 @@ class NB(object):
 
 
     def __get_avg_p(self):
-        if hasattr(self, '_avg_p'):
-            return getattr(self, '_avg_p')
+        if hasattr(self, '_avg_is_not_qq_word_p') and hasattr(self, '_avg_is_qq_word_p'):
+            return getattr(self, '_avg_is_qq_word_p'), getattr(self, '_avg_is_not_qq_word_p')
 
         cls_count = self._session.query(ClassCount).filter_by(cls='is_not_qq_number').one()
-        sql = """SELECT avg(cnt / %d) AS avg_p FROM cls_word_cnt WHERE cls = 'is_not_qq_number'""" % cls_count.cnt
+        cls_count1 = self._session.query(ClassCount).filter_by(cls='is_qq_number').one()
+        total_cnt = cls_count.cnt + cls_count1.cnt
+
+        sql = """SELECT avg(cnt / %d) AS avg_p FROM cls_word_cnt WHERE cls = 'is_not_qq_number'""" % total_cnt
         ret = list(self._engine.execute(sql))
         avg_p = list(ret[0])
         avg_p = avg_p[0]
-        setattr(self, '_avg_p', avg_p)
+        setattr(self, '_avg_is_not_qq_word_p', avg_p)
+
+        sql = """SELECT avg(cnt / %d) AS avg_p FROM cls_word_cnt WHERE cls = 'is_qq_number'""" % total_cnt
+        ret = list(self._engine.execute(sql))
+        avg_p = list(ret[0])
+        avg_p = avg_p[0]
+        setattr(self, '_avg_is_qq_word_p', avg_p)
+
         return self.__get_avg_p()
 
 
@@ -268,8 +278,10 @@ class NB(object):
             is_qq_cls_word_cnt, is_not_qq_cls_word_cnt = self.__get_word_count(w)
 
             #如果一个词没有出现，那么估计这个词出现的概率为平均每个词出现的概率
-            __P_is_qq = self.__get_avg_p()
-            __P_is_not_qq = self.__get_avg_p()
+            __P_is_qq, __P_is_not_qq = self.__get_avg_p()
+
+            if is_qq_cls_word_cnt is None and is_not_qq_cls_word_cnt is None:
+                continue
 
             if is_qq_cls_word_cnt is not None:
                 __P_is_qq = is_qq_cls_word_cnt / is_qq_cls_cnt
