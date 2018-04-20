@@ -67,13 +67,16 @@ class NB(object):
     def __do_train(self):
         cls_cnt = {False: 0, True: 0}
         cls_word_cnt = {False: {}, True: {}}
+        cnt = 0
 
         for ctx, is_qq in tqdm(self.__records(self._data_file), desc='train'):
+            cnt += 1
             cls_cnt[is_qq] = cls_cnt.get(is_qq, 0) + 1
             for w in ctx:
                 w = w.lower()
                 cls_word_cnt[is_qq][w] = cls_word_cnt[is_qq].get(w, 0) + 1
 
+        print('records num : %d' % cnt)
         self._cls_cnt = cls_cnt
         self._cls_word_cnt = cls_word_cnt
 
@@ -150,6 +153,10 @@ class NB(object):
 
         self.__save()
 
+
+
+    def records_num(self, f):
+        return len(list(self.__records(f)))
 
 
     def __records(self, f):
@@ -271,23 +278,34 @@ class NB(object):
         total_cnt = is_qq_cls_cnt + is_not_qq_cls_cnt
 
         #取对数把连乘变成连加，防止乘法下溢
-        p_positive = math.log(is_qq_cls_cnt / total_cnt)
-        p_negative = math.log(is_not_qq_cls_cnt / total_cnt)
+        p_positive = math.log(0.0005)#math.log(is_qq_cls_cnt / total_cnt)
+        p_negative = math.log(0.9995)#math.log(is_not_qq_cls_cnt / total_cnt)
 
         for w in ctx:
             is_qq_cls_word_cnt, is_not_qq_cls_word_cnt = self.__get_word_count(w)
 
             #如果一个词没有出现，那么估计这个词出现的概率为平均每个词出现的概率
-            __P_is_qq, __P_is_not_qq = self.__get_avg_p()
+            __P_is_qq_avg, __P_is_not_qq_avg = self.__get_avg_p()
+
 
             if is_qq_cls_word_cnt is None and is_not_qq_cls_word_cnt is None:
                 continue
 
-            if is_qq_cls_word_cnt is not None:
+            if is_not_qq_cls_word_cnt is None:
+                __P_is_not_qq = __P_is_not_qq_avg
+            else:
+                __P_is_not_qq = is_not_qq_cls_word_cnt / is_not_qq_cls_cnt
+
+
+            if is_qq_cls_word_cnt is  None:
+                if __P_is_not_qq <=  __P_is_not_qq_avg:
+                    continue
+                else:
+                    __P_is_qq = __P_is_qq_avg
+            else:
                 __P_is_qq = is_qq_cls_word_cnt / is_qq_cls_cnt
 
-            if is_not_qq_cls_word_cnt is not None:
-                __P_is_not_qq = is_not_qq_cls_word_cnt / is_not_qq_cls_cnt
+
 
             p_positive = p_positive + math.log(__P_is_qq)
             p_negative = p_negative + math.log(__P_is_not_qq)
